@@ -5,20 +5,37 @@
     <style>
         body {
             font-family: Arial, sans-serif;
-            max-width: 800px;
+            max-width: 1200px;
             margin: 0 auto;
             padding: 20px;
+            background-color: #f5f5f5;
         }
         .container {
             text-align: center;
         }
+        .preview-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            justify-content: center;
+            margin-top: 20px;
+        }
+        .image-pair {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            width: 520px;
+            margin-bottom: 20px;
+        }
         .preview {
             max-width: 500px;
-            margin: 20px auto;
+            margin: 10px auto;
         }
         img {
             max-width: 100%;
             height: auto;
+            border-radius: 4px;
         }
         .button {
             background-color: #4CAF50;
@@ -32,67 +49,215 @@
             margin: 4px 2px;
             cursor: pointer;
             border-radius: 4px;
+            transition: background-color 0.3s;
+        }
+        .button:hover {
+            background-color: #45a049;
+        }
+        .button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .download-button {
+            background-color: #2196F3;
+        }
+        .download-button:hover {
+            background-color: #1976D2;
+        }
+        .loading {
+            display: none;
+            margin: 20px auto;
+        }
+        .loading-spinner {
+            border: 4px solid #f3f3f3;
+            border-radius: 50%;
+            border-top: 4px solid #4CAF50;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 10px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .progress-text {
+            margin-top: 10px;
+            color: #666;
+        }
+        #dropZone {
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            margin: 20px auto;
+            background-color: white;
+            transition: border-color 0.3s;
+        }
+        #dropZone.dragover {
+            border-color: #4CAF50;
+            background-color: #e8f5e9;
+        }
+        .hidden {
+            display: none !important;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Image Processing Test</h1>
-        <form id="uploadForm">
-            <input type="file" id="imageInput" accept="image/*" style="display: none;">
-            <button type="button" class="button" onclick="document.getElementById('imageInput').click()">Select Image</button>
-            <button type="submit" class="button">Process Image</button>
-        </form>
-        <div class="preview">
-            <h3>Original Image:</h3>
-            <img id="originalPreview">
-            <h3>Processed Image:</h3>
-            <img id="processedPreview">
+        <h1>Bulk Image Processing</h1>
+        <div id="dropZone">
+            <p>Drag and drop images here or</p>
+            <input type="file" id="imageInput" accept="image/*" multiple style="display: none;">
+            <button type="button" class="button" onclick="document.getElementById('imageInput').click()">Select Images</button>
         </div>
+        <button id="processButton" class="button" disabled>Process All Images</button>
+        
+        <div class="loading">
+            <div class="loading-spinner"></div>
+            <div class="progress-text">Processing images... <span id="progressCount">0/0</span></div>
+        </div>
+
+        <div id="previewContainer" class="preview-container"></div>
     </div>
 
     <script>
-        document.getElementById('imageInput').addEventListener('change', function(e) {
-            const file = e.target.files[0];
-            if (file) {
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    document.getElementById('originalPreview').src = e.target.result;
-                }
-                reader.readAsDataURL(file);
-            }
-        });
+        const dropZone = document.getElementById('dropZone');
+        const imageInput = document.getElementById('imageInput');
+        const processButton = document.getElementById('processButton');
+        const previewContainer = document.getElementById('previewContainer');
+        const loading = document.querySelector('.loading');
+        const progressCount = document.getElementById('progressCount');
+        
+        let selectedFiles = [];
 
-        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+        // Drag and drop handlers
+        dropZone.addEventListener('dragover', (e) => {
             e.preventDefault();
-            
-            const fileInput = document.getElementById('imageInput');
-            if (!fileInput.files[0]) {
-                alert('Please select an image first');
-                return;
-            }
-
-            const formData = new FormData();
-            formData.append('image', fileInput.files[0]);
-
-            try {
-                const response = await fetch('http://localhost:5000/api/process-image', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                if (!response.ok) {
-                    throw new Error('Network response was not ok');
-                }
-
-                const blob = await response.blob();
-                const imageUrl = URL.createObjectURL(blob);
-                document.getElementById('processedPreview').src = imageUrl;
-            } catch (error) {
-                console.error('Error:', error);
-                alert('Error processing image: ' + error.message);
-            }
+            dropZone.classList.add('dragover');
         });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            const files = Array.from(e.dataTransfer.files).filter(file => file.type.startsWith('image/'));
+            handleFiles(files);
+        });
+
+        imageInput.addEventListener('change', (e) => {
+            const files = Array.from(e.target.files);
+            handleFiles(files);
+        });
+
+        function handleFiles(files) {
+            selectedFiles = [...selectedFiles, ...files];
+            processButton.disabled = selectedFiles.length === 0;
+            
+            files.forEach(file => {
+                const imagePair = createImagePair(file);
+                previewContainer.appendChild(imagePair);
+            });
+        }
+
+        function createImagePair(file) {
+            const container = document.createElement('div');
+            container.className = 'image-pair';
+            
+            const originalTitle = document.createElement('h3');
+            originalTitle.textContent = 'Original Image';
+            
+            const processedTitle = document.createElement('h3');
+            processedTitle.textContent = 'Processed Image';
+            
+            const originalPreview = document.createElement('div');
+            originalPreview.className = 'preview';
+            
+            const processedPreview = document.createElement('div');
+            processedPreview.className = 'preview';
+            
+            const originalImg = document.createElement('img');
+            const reader = new FileReader();
+            reader.onload = (e) => originalImg.src = e.target.result;
+            reader.readAsDataURL(file);
+            
+            const processedImg = document.createElement('img');
+            processedImg.style.display = 'none';
+            
+            const downloadButton = document.createElement('button');
+            downloadButton.className = 'button download-button';
+            downloadButton.textContent = 'Download';
+            downloadButton.style.display = 'none';
+            downloadButton.onclick = () => downloadImage(processedImg.src, file.name.replace(/\.[^/.]+$/, '') + '_processed.png');
+            
+            originalPreview.appendChild(originalImg);
+            processedPreview.appendChild(processedImg);
+            
+            container.appendChild(originalTitle);
+            container.appendChild(originalPreview);
+            container.appendChild(processedTitle);
+            container.appendChild(processedPreview);
+            container.appendChild(downloadButton);
+            
+            return container;
+        }
+
+        processButton.addEventListener('click', async () => {
+            processButton.disabled = true;
+            loading.style.display = 'block';
+            let processed = 0;
+            
+            for (let i = 0; i < selectedFiles.length; i++) {
+                progressCount.textContent = `${processed}/${selectedFiles.length}`;
+                
+                const file = selectedFiles[i];
+                const imagePair = previewContainer.children[i];
+                const processedImg = imagePair.querySelector('.preview:nth-of-type(2) img');
+                const downloadButton = imagePair.querySelector('.download-button');
+                
+                try {
+                    const formData = new FormData();
+                    formData.append('image', file);
+                    
+                    const response = await fetch('/api/process-image', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    if (!response.ok) throw new Error('Processing failed');
+                    
+                    const blob = await response.blob();
+                    const imageUrl = URL.createObjectURL(blob);
+                    processedImg.src = imageUrl;
+                    processedImg.style.display = 'block';
+                    downloadButton.style.display = 'inline-block';
+                    processed++;
+                } catch (error) {
+                    console.error('Error processing image:', error);
+                    processedImg.style.display = 'none';
+                    const errorText = document.createElement('p');
+                    errorText.style.color = 'red';
+                    errorText.textContent = 'Error processing image';
+                    imagePair.appendChild(errorText);
+                }
+            }
+            
+            progressCount.textContent = `${processed}/${selectedFiles.length}`;
+            loading.style.display = 'none';
+            processButton.disabled = false;
+        });
+
+        function downloadImage(dataUrl, filename) {
+            const link = document.createElement('a');
+            link.href = dataUrl;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
     </script>
 </body>
 </html> 
