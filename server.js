@@ -22,16 +22,28 @@ app.use(express.static(__dirname));
 console.log('Static directory:', __dirname);
 console.log('Files in directory:', fs.readdirSync(__dirname));
 
+// Ensure directories exist
+const isProduction = process.env.NODE_ENV === 'production';
+const baseDir = isProduction ? '/tmp' : path.join(__dirname);
+const uploadDir = path.join(baseDir, 'uploads');
+const processedDir = path.join(baseDir, 'processed');
+
+console.log('Environment:', process.env.NODE_ENV || 'development');
+console.log('Base directory:', baseDir);
+console.log('Upload directory:', uploadDir);
+console.log('Processed directory:', processedDir);
+
+// Create directories if they don't exist
+[uploadDir, processedDir].forEach(dir => {
+    if (!fs.existsSync(dir)) {
+        console.log(`Creating directory: ${dir}`);
+        fs.mkdirSync(dir, { recursive: true });
+    }
+});
+
 // Set up storage for uploaded files
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        // Use /tmp directory in production for Render.com
-        const uploadDir = process.env.NODE_ENV === 'production' ? '/tmp/uploads' : 'uploads';
-        console.log('Upload directory:', uploadDir);
-        if (!fs.existsSync(uploadDir)) {
-            console.log('Creating upload directory...');
-            fs.mkdirSync(uploadDir, { recursive: true });
-        }
         cb(null, uploadDir);
     },
     filename: (req, file, cb) => {
@@ -43,26 +55,13 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-// Ensure directories exist
-const uploadDir = process.env.NODE_ENV === 'production' ? '/tmp/uploads' : 'uploads';
-const processedDir = process.env.NODE_ENV === 'production' ? '/tmp/processed' : 'processed';
-
-console.log('Creating directories if they don\'t exist:');
-console.log('Upload directory:', uploadDir);
-console.log('Processed directory:', processedDir);
-
-if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
-    console.log('Created upload directory');
-}
-if (!fs.existsSync(processedDir)) {
-    fs.mkdirSync(processedDir, { recursive: true });
-    console.log('Created processed directory');
-}
-
 // Single endpoint for processing images
 app.post('/api/process-image', upload.single('image'), (req, res) => {
     console.log('Received image processing request');
+    console.log('Environment:', process.env.NODE_ENV);
+    console.log('Python Path:', process.env.PYTHONPATH);
+    console.log('Current working directory:', process.cwd());
+    
     if (!req.file) {
         console.log('No file uploaded');
         return res.status(400).json({ error: 'No image file uploaded' });
@@ -75,6 +74,8 @@ app.post('/api/process-image', upload.single('image'), (req, res) => {
     
     console.log('Input path:', inputPath);
     console.log('Output path:', outputPath);
+    console.log('Checking file exists:', fs.existsSync(inputPath));
+    console.log('Input file size:', fs.statSync(inputPath).size);
 
     // Default size for resizing
     const width = 500;
@@ -82,29 +83,49 @@ app.post('/api/process-image', upload.single('image'), (req, res) => {
 
     const pythonScript = `
 import sys
+import os
 import traceback
 from rembg import remove
 from PIL import Image
 
 try:
-    input_path = '${inputPath.replace(/\\/g, '\\\\')}'
-    output_path = '${outputPath.replace(/\\/g, '\\\\')}'
+    print(f"Python version: {sys.version}")
+    print(f"Current working directory: {os.getcwd()}")
+    print(f"PYTHONPATH: {os.environ.get('PYTHONPATH', 'Not set')}")
+    print(f"Files in current directory: {os.listdir('.')}")
+    
+    input_path = r'${inputPath}'
+    output_path = r'${outputPath}'
+    
+    print(f"Python script starting...")
+    print(f"Input path: {input_path}")
+    print(f"Output path: {output_path}")
+    print(f"Input file exists: {os.path.exists(input_path)}")
+    if os.path.exists(input_path):
+        print(f"Input file size: {os.path.getsize(input_path)}")
     
     # Load image
     print("Loading image...")
     input_img = Image.open(input_path)
+    print(f"Image loaded successfully. Size: {input_img.size}, Mode: {input_img.mode}")
     
     # Resize image
     print("Resizing image...")
     input_img = input_img.resize((${width}, ${height}), Image.Resampling.LANCZOS)
+    print(f"Image resized successfully. New size: {input_img.size}")
     
     # Remove background
     print("Removing background...")
     output_img = remove(input_img)
+    print(f"Background removed successfully. Output size: {output_img.size}, Mode: {output_img.mode}")
     
     # Save the processed image
+    print("Saving image...")
     output_img.save(output_path, "PNG")
-    print(f"Image saved to: {output_path}")
+    print(f"Image saved successfully to: {output_path}")
+    print(f"Output file exists: {os.path.exists(output_path)}")
+    if os.path.exists(output_path):
+        print(f"Output file size: {os.path.getsize(output_path)}")
     
     sys.exit(0)
 except Exception as e:
@@ -130,10 +151,15 @@ except Exception as e:
         console.error(`Python stderr: ${data.toString()}`);
     });
 
+    pythonProcess.on('error', (error) => {
+        console.error('Failed to start Python process:', error);
+        return res.status(500).json({ error: `Failed to start Python process: ${error.message}` });
+    });
+
     pythonProcess.on('close', (code) => {
         console.log('Python process closed with code:', code);
         if (code !== 0) {
-            console.error('Processing failed');
+            console.error('Processing failed with error:', stderrData);
             // Clean up input file
             fs.unlink(inputPath, (err) => {
                 if (err) console.error('Error deleting input file:', err);
@@ -148,6 +174,8 @@ except Exception as e:
         }
 
         console.log('Sending processed file:', outputPath);
+        console.log('Output file size:', fs.statSync(outputPath).size);
+        
         // Send the processed image
         res.sendFile(path.resolve(outputPath), {}, (err) => {
             if (err) {
@@ -186,7 +214,6 @@ app.get('/', (req, res) => {
 // Start the server
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
-    console.log('Environment:', process.env.NODE_ENV || 'development');
     console.log('Current directory:', __dirname);
     console.log('Available routes:');
     console.log('  - GET /test.html (Web Interface)');

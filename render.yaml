@@ -4,6 +4,7 @@ services:
     env: node
     buildCommand: |
       npm install
+      python -m pip install --upgrade pip
       pip install -r requirements.txt
       mkdir -p /tmp/uploads /tmp/processed
       chmod 777 /tmp/uploads /tmp/processed
@@ -13,6 +14,10 @@ services:
         value: production
       - key: PORT
         value: 10000
+      - key: PYTHONPATH
+        value: /opt/render/project/src
+      - key: PYTHONUNBUFFERED
+        value: "1"
     disk:
       name: uploads
       mountPath: /tmp
