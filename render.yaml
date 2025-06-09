@@ -12,15 +12,23 @@ services:
         value: production
       - key: PORT
         value: 10000
-      - key: PYTHON_VERSION
-        value: 3.9.18
       - key: PYTHONUNBUFFERED
         value: "1"
-      - key: PATH
-        value: /opt/render/project/python/bin:${PATH}
+      - key: NODE_OPTIONS
+        value: "--max-old-space-size=450"
+      - key: REMBG_MAX_MEMORY
+        value: "450"
     disk:
       name: uploads
       mountPath: /tmp
       sizeGB: 1
     runtime: python3
-    staticPublishPath: ./ 
+    staticPublishPath: ./
+    plan: standard
+    scaling:
+      minInstances: 1
+      maxInstances: 1
+    resources:
+      cpu: 1
+      memory: 2048
+      swap: 2048 

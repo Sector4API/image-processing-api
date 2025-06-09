@@ -8,6 +8,10 @@ const cors = require('cors');
 const app = express();
 const port = process.env.PORT || 5000;
 
+// Constants for file size limits
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB max file size
+const MAX_IMAGE_DIMENSION = 2000; // Max 2000px in any dimension
+
 // Enable CORS
 app.use(cors());
 
@@ -44,37 +48,30 @@ console.log('Processed directory:', processedDir);
     }
 });
 
-// Configure multer with file size limits
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, uploadDir);
-    },
-    filename: (req, file, cb) => {
-        const filename = Date.now() + path.extname(file.originalname);
-        console.log('Generated filename:', filename);
-        cb(null, filename);
-    }
-});
-
+// Configure multer with file size limit
 const upload = multer({
-    storage,
-    limits: {
-        fileSize: 10 * 1024 * 1024, // 10MB limit
+  dest: path.join(isProduction ? '/tmp' : __dirname, 'uploads'),
+  limits: {
+    fileSize: MAX_FILE_SIZE
+  },
+  fileFilter: (req, file, cb) => {
+    // Check file type
+    if (!file.mimetype.startsWith('image/')) {
+      return cb(new Error('Only image files are allowed'));
     }
+    cb(null, true);
+  }
 });
 
-// Error handling middleware for multer
-const handleMulterError = (err, req, res, next) => {
-    if (err instanceof multer.MulterError) {
-        if (err.code === 'LIMIT_FILE_SIZE') {
-            return res.status(400).json({ error: 'File size too large. Maximum size is 10MB.' });
-        }
-        return res.status(400).json({ error: `Upload error: ${err.message}` });
+// Add error handling middleware
+app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: `File size too large. Maximum size is ${MAX_FILE_SIZE / (1024 * 1024)}MB` });
     }
-    next(err);
-};
-
-app.use(handleMulterError);
+  }
+  next(err);
+});
 
 // Get Python executable path
 function getPythonPath() {
@@ -101,6 +98,41 @@ const log = {
     }
 };
 
+// Function to check image dimensions
+async function checkImageDimensions(filePath) {
+  return new Promise((resolve, reject) => {
+    const pythonScript = `
+import sys
+from PIL import Image
+
+try:
+    with Image.open('${filePath}') as img:
+        width, height = img.size
+        print(f"{width},{height}")
+        sys.exit(0)
+except Exception as e:
+    print(f"Error: {str(e)}", file=sys.stderr)
+    sys.exit(1)
+`;
+
+    const process = spawn(getPythonPath(), ['-c', pythonScript]);
+    let output = '';
+
+    process.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    process.on('close', (code) => {
+      if (code === 0) {
+        const [width, height] = output.trim().split(',').map(Number);
+        resolve({ width, height });
+      } else {
+        reject(new Error('Failed to check image dimensions'));
+      }
+    });
+  });
+}
+
 // Single endpoint for processing images
 app.post('/api/process-image', upload.single('image'), async (req, res) => {
     log.stage('REQUEST', 'Received new image processing request');
@@ -112,15 +144,24 @@ app.post('/api/process-image', upload.single('image'), async (req, res) => {
         return res.status(400).json({ error: 'No image file uploaded' });
     }
 
-    log.stage('FILE_RECEIVED', `File received: ${JSON.stringify(req.file, null, 2)}`);
-    const inputPath = req.file.path;
-    const outputFilename = `processed_${path.basename(req.file.filename, path.extname(req.file.filename))}.png`;
-    const outputPath = path.join(processedDir, outputFilename);
-
-    log.info(`Input path: ${inputPath}`);
-    log.info(`Output path: ${outputPath}`);
-
     try {
+        // Check image dimensions
+        const dimensions = await checkImageDimensions(req.file.path);
+        if (dimensions.width > MAX_IMAGE_DIMENSION || dimensions.height > MAX_IMAGE_DIMENSION) {
+            cleanupFiles(req.file.path);
+            return res.status(413).json({ 
+                error: `Image dimensions too large. Maximum allowed is ${MAX_IMAGE_DIMENSION}x${MAX_IMAGE_DIMENSION} pixels` 
+            });
+        }
+
+        log.stage('FILE_RECEIVED', `File received: ${JSON.stringify(req.file, null, 2)}`);
+        const inputPath = req.file.path;
+        const outputFilename = `processed_${path.basename(req.file.filename, path.extname(req.file.filename))}.png`;
+        const outputPath = path.join(processedDir, outputFilename);
+
+        log.info(`Input path: ${inputPath}`);
+        log.info(`Output path: ${outputPath}`);
+
         // Verify input file
         if (!fs.existsSync(inputPath)) {
             throw new Error('Input file not found after upload');
@@ -148,12 +189,17 @@ from rembg import remove
 from PIL import Image
 import time
 
+# Force unbuffered output
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
 def log_stage(stage, message):
-    print(f"[PYTHON] [{stage}] {message}")
+    print(f"[PYTHON] [{stage}] {message}", flush=True)
 
 try:
     log_stage("INIT", f"Python version: {sys.version}")
     log_stage("INIT", f"Working directory: {os.getcwd()}")
+    log_stage("INIT", f"Available memory: {os.system('free -m')}")
     
     # Log environment variables
     log_stage("ENV", "Environment variables:")
@@ -173,37 +219,57 @@ try:
     log_stage("FILE_INFO", f"Input file size: {os.path.getsize(input_path)} bytes")
     log_stage("FILE_INFO", f"Input file permissions: {oct(os.stat(input_path).st_mode)}")
     
-    # Load image
+    # Load image with error handling
     log_stage("LOAD_IMAGE", "Loading input image...")
     start_time = time.time()
-    input_img = Image.open(input_path)
-    log_stage("LOAD_IMAGE", f"Image loaded in {time.time() - start_time:.2f}s. Size: {input_img.size}, Mode: {input_img.mode}")
+    try:
+        input_img = Image.open(input_path)
+        log_stage("LOAD_IMAGE", f"Image loaded in {time.time() - start_time:.2f}s. Size: {input_img.size}, Mode: {input_img.mode}")
+    except Exception as e:
+        log_stage("ERROR", f"Failed to load image: {str(e)}")
+        raise
     
     # Convert to RGB if needed
     if input_img.mode != 'RGB':
         log_stage("COLOR_CONVERT", f"Converting from {input_img.mode} to RGB")
         start_time = time.time()
-        input_img = input_img.convert('RGB')
-        log_stage("COLOR_CONVERT", f"Conversion completed in {time.time() - start_time:.2f}s")
+        try:
+            input_img = input_img.convert('RGB')
+            log_stage("COLOR_CONVERT", f"Conversion completed in {time.time() - start_time:.2f}s")
+        except Exception as e:
+            log_stage("ERROR", f"Failed to convert image to RGB: {str(e)}")
+            raise
     
-    # Resize image
+    # Resize image with error handling
     log_stage("RESIZE", f"Resizing image to {${width}}x{${height}}")
     start_time = time.time()
-    input_img = input_img.resize((${width}, ${height}), Image.Resampling.LANCZOS)
-    log_stage("RESIZE", f"Resize completed in {time.time() - start_time:.2f}s. New size: {input_img.size}")
+    try:
+        input_img = input_img.resize((${width}, ${height}))
+        log_stage("RESIZE", f"Resize completed in {time.time() - start_time:.2f}s. New size: {input_img.size}")
+    except Exception as e:
+        log_stage("ERROR", f"Failed to resize image: {str(e)}")
+        raise
     
-    # Remove background
+    # Remove background with error handling and memory tracking
     log_stage("REMOVE_BG", "Starting background removal...")
     start_time = time.time()
-    output_img = remove(input_img)
-    log_stage("REMOVE_BG", f"Background removal completed in {time.time() - start_time:.2f}s")
-    log_stage("REMOVE_BG", f"Output image size: {output_img.size}, Mode: {output_img.mode}")
+    try:
+        output_img = remove(input_img)
+        log_stage("REMOVE_BG", f"Background removal completed in {time.time() - start_time:.2f}s")
+        log_stage("REMOVE_BG", f"Output image size: {output_img.size}, Mode: {output_img.mode}")
+    except Exception as e:
+        log_stage("ERROR", f"Failed to remove background: {str(e)}")
+        raise
     
-    # Save the processed image
+    # Save the processed image with error handling
     log_stage("SAVE", f"Saving processed image to {output_path}")
     start_time = time.time()
-    output_img.save(output_path, "PNG")
-    log_stage("SAVE", f"Save completed in {time.time() - start_time:.2f}s")
+    try:
+        output_img.save(output_path, "PNG")
+        log_stage("SAVE", f"Save completed in {time.time() - start_time:.2f}s")
+    except Exception as e:
+        log_stage("ERROR", f"Failed to save output image: {str(e)}")
+        raise
     
     if not os.path.exists(output_path):
         raise FileNotFoundError(f"Output file was not created: {output_path}")
@@ -222,7 +288,17 @@ except Exception as e:
         const pythonPath = getPythonPath();
         log.info(`Using Python executable: ${pythonPath}`);
         
-        const pythonProcess = spawn(pythonPath, ['-c', pythonScript]);
+        // Update timeout for smaller value in free tier
+        const TIMEOUT_MS = 120000; // 2 minutes timeout for free tier
+        let processTimeout;
+        
+        const pythonProcess = spawn(pythonPath, ['-c', pythonScript], {
+            env: {
+                ...process.env,
+                PYTHONUNBUFFERED: "1",
+                REMBG_MAX_MEMORY: "450"  // Limit rembg memory usage
+            }
+        });
 
         let stdoutData = '';
         let stderrData = '';
@@ -244,17 +320,37 @@ except Exception as e:
         });
 
         pythonProcess.on('error', (error) => {
+            clearTimeout(processTimeout);
             log.error('PYTHON_SPAWN', 'Failed to start Python process', error);
             cleanupFiles(inputPath);
             return res.status(500).json({ error: `Failed to start Python process: ${error.message}` });
         });
 
+        processTimeout = setTimeout(() => {
+            log.error('TIMEOUT', 'Python process timed out after 2 minutes');
+            pythonProcess.kill();
+            cleanupFiles(inputPath);
+            return res.status(504).json({ 
+                error: 'Processing timed out. Please try with a smaller image or reduce image complexity.'
+            });
+        }, TIMEOUT_MS);
+
         pythonProcess.on('close', (code) => {
+            clearTimeout(processTimeout);
             log.stage('PYTHON_COMPLETE', `Python process closed with code: ${code}`);
+            
             if (code !== 0) {
                 log.error('PYTHON_ERROR', 'Processing failed', stderrData);
                 cleanupFiles(inputPath);
-                return res.status(500).json({ error: `Processing failed: ${stderrData}` });
+                
+                // Try to extract a meaningful error message
+                const errorMatch = stderrData.match(/\[PYTHON\] \[ERROR\] (.+)/);
+                const errorMessage = errorMatch ? errorMatch[1] : stderrData;
+                
+                return res.status(500).json({ 
+                    error: `Processing failed: ${errorMessage}`,
+                    details: stderrData
+                });
             }
 
             // Verify the output file
@@ -277,9 +373,9 @@ except Exception as e:
             });
         });
     } catch (error) {
-        log.error('UNEXPECTED', 'Unexpected error occurred', error);
-        cleanupFiles(inputPath);
-        return res.status(500).json({ error: `Unexpected error: ${error.message}` });
+        log.error('PROCESSING', 'Error during image processing', error);
+        cleanupFiles(req.file.path);
+        return res.status(500).json({ error: 'Error processing image: ' + error.message });
     }
 });
 
