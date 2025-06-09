@@ -38,6 +38,9 @@ console.log('Processed directory:', processedDir);
     if (!fs.existsSync(dir)) {
         console.log(`Creating directory: ${dir}`);
         fs.mkdirSync(dir, { recursive: true });
+        if (isProduction) {
+            fs.chmodSync(dir, '777');
+        }
     }
 });
 
@@ -73,11 +76,19 @@ const handleMulterError = (err, req, res, next) => {
 
 app.use(handleMulterError);
 
+// Get Python executable path
+function getPythonPath() {
+    if (isProduction) {
+        // In production (Render.com), Python is in the PATH
+        return 'python3';
+    }
+    return 'python'; // Local development
+}
+
 // Single endpoint for processing images
 app.post('/api/process-image', upload.single('image'), async (req, res) => {
     console.log('Received image processing request');
     console.log('Environment:', process.env.NODE_ENV);
-    console.log('Python Path:', process.env.PYTHONPATH);
     console.log('Current working directory:', process.cwd());
     
     if (!req.file) {
@@ -94,8 +105,19 @@ app.post('/api/process-image', upload.single('image'), async (req, res) => {
     console.log('Output path:', outputPath);
 
     try {
-        console.log('Checking file exists:', fs.existsSync(inputPath));
+        // Verify input file
+        if (!fs.existsSync(inputPath)) {
+            throw new Error('Input file not found after upload');
+        }
+
+        console.log('Input file exists:', fs.existsSync(inputPath));
         console.log('Input file size:', fs.statSync(inputPath).size);
+        console.log('Input file permissions:', fs.statSync(inputPath).mode.toString(8));
+
+        // Verify directories are writable
+        fs.accessSync(uploadDir, fs.constants.W_OK);
+        fs.accessSync(processedDir, fs.constants.W_OK);
+        console.log('Directories are writable');
 
         // Default size for resizing
         const width = 500;
@@ -111,7 +133,10 @@ from PIL import Image
 try:
     print(f"Python version: {sys.version}")
     print(f"Current working directory: {os.getcwd()}")
-    print(f"PYTHONPATH: {os.environ.get('PYTHONPATH', 'Not set')}")
+    print(f"Environment variables:")
+    for key, value in os.environ.items():
+        if 'PATH' in key or 'PYTHON' in key:
+            print(f"{key}: {value}")
     
     input_path = r'${inputPath}'
     output_path = r'${outputPath}'
@@ -124,6 +149,7 @@ try:
         raise FileNotFoundError(f"Input file not found: {input_path}")
     
     print(f"Input file size: {os.path.getsize(input_path)}")
+    print(f"Input file permissions: {oct(os.stat(input_path).st_mode)}")
     
     # Load image
     print("Loading image...")
@@ -154,6 +180,7 @@ try:
         raise FileNotFoundError(f"Output file was not created: {output_path}")
     
     print(f"Output file size: {os.path.getsize(output_path)}")
+    print(f"Output file permissions: {oct(os.stat(output_path).st_mode)}")
     sys.exit(0)
 except Exception as e:
     print(f"Error: {str(e)}", file=sys.stderr)
@@ -163,7 +190,10 @@ except Exception as e:
 `;
 
         console.log('Spawning Python process...');
-        const pythonProcess = spawn('python', ['-c', pythonScript]);
+        const pythonPath = getPythonPath();
+        console.log('Using Python executable:', pythonPath);
+        
+        const pythonProcess = spawn(pythonPath, ['-c', pythonScript]);
 
         let stdoutData = '';
         let stderrData = '';
@@ -250,6 +280,7 @@ app.get('/', (req, res) => {
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
     console.log('Current directory:', process.cwd());
+    console.log('Python executable:', getPythonPath());
     console.log('Available routes:');
     console.log('  - GET /test.html (Web Interface)');
     console.log('  - GET / (Redirects to /test.html)');

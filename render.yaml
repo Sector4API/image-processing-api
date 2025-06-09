@@ -1,23 +1,23 @@
 services:
   - type: web
     name: image-processor-api
-    env: node
+    env: python
     buildCommand: |
-      npm install
       python -m pip install --upgrade pip
       pip install -r requirements.txt
-      mkdir -p /tmp/uploads /tmp/processed
-      chmod 777 /tmp/uploads /tmp/processed
+      npm install
     startCommand: node server.js
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
         value: 10000
-      - key: PYTHONPATH
-        value: /opt/render/project/src
+      - key: PYTHON_VERSION
+        value: 3.9.18
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: PATH
+        value: /opt/render/project/python/bin:${PATH}
     disk:
       name: uploads
       mountPath: /tmp
