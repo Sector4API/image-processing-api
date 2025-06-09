@@ -35,7 +35,7 @@ function App() {
         try {
             console.log('Starting image processing...');
             const results = await batchRemoveBackground(files);
-            setProcessedImages(results);
+                setProcessedImages(results);
         } catch (error) {
             console.error('Error during processing:', error);
             alert('An error occurred during processing. Please try again.');
@@ -102,9 +102,9 @@ function App() {
                 {isProcessing && (
                     <section className="app-section">
                         <h2>Processing...</h2>
-                        <div className="progress-bar">
-                            <div className="progress-bar-fill"></div>
-                        </div>
+                                        <div className="progress-bar">
+                                            <div className="progress-bar-fill"></div>
+                                        </div>
                     </section>
                 )}
 
@@ -124,8 +124,8 @@ function App() {
                                                     src={getImagePreviewUrl(result.processed)}
                                                     alt={`Processed ${index}`}
                                                 />
-                                            </div>
-                                            <div className="image-actions">
+                                                            </div>
+                                                            <div className="image-actions">
                                                 <button onClick={() => deleteProcessedImage(index)}>Delete</button>
                                                 <a
                                                     href={getImagePreviewUrl(result.processed)}
@@ -133,15 +133,15 @@ function App() {
                                                     className="download-button"
                                                 >
                                                     Download
-                                                </a>
-                                            </div>
+                                                                </a>
+                                                            </div>
                                         </>
-                                    ) : (
+                                            ) : (
                                         <div className="error-message">{result.error}</div>
                                     )}
                                 </div>
                             ))}
-                        </div>
+                            </div>
                     </section>
                 )}
             </main>

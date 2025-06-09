@@ -17,28 +17,27 @@ app.use((req, res, next) => {
     next();
 });
 
-// Serve static files
+// Serve static files from the root directory
 app.use(express.static(__dirname));
 console.log('Static directory:', __dirname);
 console.log('Files in directory:', fs.readdirSync(__dirname));
-
-// Serve static files from the React app in production
-if (process.env.NODE_ENV === 'production' && fs.existsSync(path.join(__dirname, 'build'))) {
-    app.use(express.static(path.join(__dirname, 'build')));
-}
 
 // Set up storage for uploaded files
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         // Use /tmp directory in production for Render.com
         const uploadDir = process.env.NODE_ENV === 'production' ? '/tmp/uploads' : 'uploads';
+        console.log('Upload directory:', uploadDir);
         if (!fs.existsSync(uploadDir)) {
+            console.log('Creating upload directory...');
             fs.mkdirSync(uploadDir, { recursive: true });
         }
         cb(null, uploadDir);
     },
     filename: (req, file, cb) => {
-        cb(null, Date.now() + path.extname(file.originalname));
+        const filename = Date.now() + path.extname(file.originalname);
+        console.log('Generated filename:', filename);
+        cb(null, filename);
     }
 });
 
@@ -48,22 +47,34 @@ const upload = multer({ storage });
 const uploadDir = process.env.NODE_ENV === 'production' ? '/tmp/uploads' : 'uploads';
 const processedDir = process.env.NODE_ENV === 'production' ? '/tmp/processed' : 'processed';
 
+console.log('Creating directories if they don\'t exist:');
+console.log('Upload directory:', uploadDir);
+console.log('Processed directory:', processedDir);
+
 if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir, { recursive: true });
+    console.log('Created upload directory');
 }
 if (!fs.existsSync(processedDir)) {
     fs.mkdirSync(processedDir, { recursive: true });
+    console.log('Created processed directory');
 }
 
 // Single endpoint for processing images
 app.post('/api/process-image', upload.single('image'), (req, res) => {
+    console.log('Received image processing request');
     if (!req.file) {
+        console.log('No file uploaded');
         return res.status(400).json({ error: 'No image file uploaded' });
     }
 
+    console.log('File details:', req.file);
     const inputPath = req.file.path;
     const outputFilename = `processed_${path.basename(req.file.filename, path.extname(req.file.filename))}.png`;
     const outputPath = path.join(processedDir, outputFilename);
+    
+    console.log('Input path:', inputPath);
+    console.log('Output path:', outputPath);
 
     // Default size for resizing
     const width = 500;
@@ -103,6 +114,7 @@ except Exception as e:
     sys.exit(1)
 `;
 
+    console.log('Spawning Python process...');
     const pythonProcess = spawn('python', ['-c', pythonScript]);
 
     let stdoutData = '';
@@ -110,15 +122,16 @@ except Exception as e:
 
     pythonProcess.stdout.on('data', (data) => {
         stdoutData += data.toString();
-        console.log(`stdout: ${data.toString()}`);
+        console.log(`Python stdout: ${data.toString()}`);
     });
 
     pythonProcess.stderr.on('data', (data) => {
         stderrData += data.toString();
-        console.error(`stderr: ${data.toString()}`);
+        console.error(`Python stderr: ${data.toString()}`);
     });
 
     pythonProcess.on('close', (code) => {
+        console.log('Python process closed with code:', code);
         if (code !== 0) {
             console.error('Processing failed');
             // Clean up input file
@@ -128,6 +141,13 @@ except Exception as e:
             return res.status(500).json({ error: `Processing failed: ${stderrData}` });
         }
 
+        // Verify the output file exists
+        if (!fs.existsSync(outputPath)) {
+            console.error('Output file not found:', outputPath);
+            return res.status(500).json({ error: 'Output file not found' });
+        }
+
+        console.log('Sending processed file:', outputPath);
         // Send the processed image
         res.sendFile(path.resolve(outputPath), {}, (err) => {
             if (err) {
@@ -136,6 +156,7 @@ except Exception as e:
             }
 
             // Clean up files after sending
+            console.log('Cleaning up files...');
             fs.unlink(inputPath, (err) => {
                 if (err) console.error('Error deleting input file:', err);
             });
@@ -159,46 +180,18 @@ app.get('/test.html', (req, res) => {
 
 // Root route
 app.get('/', (req, res) => {
-    const testHtmlPath = path.join(__dirname, 'test.html');
-    if (fs.existsSync(testHtmlPath)) {
-        res.sendFile(testHtmlPath);
-    } else {
-        res.send(`
-            <h1>Image Processing API</h1>
-            <p>Use POST /api/process-image to process images.</p>
-            <p>The API will automatically resize images to 500x500 and remove backgrounds.</p>
-            <p>Note: test.html not found in ${__dirname}</p>
-            <p>Available files: ${fs.readdirSync(__dirname).join(', ')}</p>
-        `);
-    }
+    res.redirect('/test.html');
 });
 
-// Serve the React app for any other routes in production
-if (process.env.NODE_ENV === 'production' && fs.existsSync(path.join(__dirname, 'build'))) {
-    app.get('/', (req, res) => {
-        res.sendFile(path.join(__dirname, 'build', 'index.html'));
-    });
-}
-
-// Add a catch-all route for API 404s
-app.use('/api/*', (req, res) => {
-    res.status(404).json({ error: 'API endpoint not found' });
-});
-
+// Start the server
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
+    console.log('Environment:', process.env.NODE_ENV || 'development');
     console.log('Current directory:', __dirname);
-    console.log('Files available:', fs.readdirSync(__dirname));
-    console.log(`
-API Endpoint:
-  POST /api/process-image
-    - Automatically resizes image to 500x500 and removes background
-    - File parameter: image
-    - Returns: Processed PNG image with transparent background
-  
-Web Interface:
-  GET /
-    - Opens the web interface for easy image processing
-    - Or visit /test.html directly
-`);
+    console.log('Available routes:');
+    console.log('  - GET /test.html (Web Interface)');
+    console.log('  - GET / (Redirects to /test.html)');
+    console.log('  - POST /api/process-image (API Endpoint)');
+    console.log('\nTry accessing:');
+    console.log(`  http://localhost:${port}/test.html`);
 });
