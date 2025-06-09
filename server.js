@@ -11,6 +11,17 @@ const port = process.env.PORT || 5000;
 // Enable CORS
 app.use(cors());
 
+// Log all requests
+app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+    next();
+});
+
+// Serve static files
+app.use(express.static(__dirname));
+console.log('Static directory:', __dirname);
+console.log('Files in directory:', fs.readdirSync(__dirname));
+
 // Serve static files from the React app in production
 if (process.env.NODE_ENV === 'production' && fs.existsSync(path.join(__dirname, 'build'))) {
     app.use(express.static(path.join(__dirname, 'build')));
@@ -135,6 +146,33 @@ except Exception as e:
     });
 });
 
+// Explicit route for test.html
+app.get('/test.html', (req, res) => {
+    const testHtmlPath = path.join(__dirname, 'test.html');
+    console.log('Attempting to serve test.html from:', testHtmlPath);
+    if (fs.existsSync(testHtmlPath)) {
+        res.sendFile(testHtmlPath);
+    } else {
+        res.status(404).send('test.html not found. Available files: ' + fs.readdirSync(__dirname).join(', '));
+    }
+});
+
+// Root route
+app.get('/', (req, res) => {
+    const testHtmlPath = path.join(__dirname, 'test.html');
+    if (fs.existsSync(testHtmlPath)) {
+        res.sendFile(testHtmlPath);
+    } else {
+        res.send(`
+            <h1>Image Processing API</h1>
+            <p>Use POST /api/process-image to process images.</p>
+            <p>The API will automatically resize images to 500x500 and remove backgrounds.</p>
+            <p>Note: test.html not found in ${__dirname}</p>
+            <p>Available files: ${fs.readdirSync(__dirname).join(', ')}</p>
+        `);
+    }
+});
+
 // Serve the React app for any other routes in production
 if (process.env.NODE_ENV === 'production' && fs.existsSync(path.join(__dirname, 'build'))) {
     app.get('/', (req, res) => {
@@ -147,22 +185,20 @@ app.use('/api/*', (req, res) => {
     res.status(404).json({ error: 'API endpoint not found' });
 });
 
-// Add a basic route for the root path when not in production
-app.get('/', (req, res) => {
-    res.send(`
-        <h1>Image Processing API</h1>
-        <p>Use POST /api/process-image to process images.</p>
-        <p>The API will automatically resize images to 500x500 and remove backgrounds.</p>
-    `);
-});
-
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
+    console.log('Current directory:', __dirname);
+    console.log('Files available:', fs.readdirSync(__dirname));
     console.log(`
 API Endpoint:
   POST /api/process-image
     - Automatically resizes image to 500x500 and removes background
     - File parameter: image
     - Returns: Processed PNG image with transparent background
+  
+Web Interface:
+  GET /
+    - Opens the web interface for easy image processing
+    - Or visit /test.html directly
 `);
 });
