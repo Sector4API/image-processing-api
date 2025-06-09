@@ -85,24 +85,40 @@ function getPythonPath() {
     return 'python'; // Local development
 }
 
+// Add a logging utility
+const log = {
+    stage: (stage, message) => {
+        const timestamp = new Date().toISOString();
+        console.log(`[${timestamp}] [STAGE: ${stage}] ${message}`);
+    },
+    error: (stage, message, error) => {
+        const timestamp = new Date().toISOString();
+        console.error(`[${timestamp}] [ERROR: ${stage}] ${message}`, error);
+    },
+    info: (message) => {
+        const timestamp = new Date().toISOString();
+        console.log(`[${timestamp}] [INFO] ${message}`);
+    }
+};
+
 // Single endpoint for processing images
 app.post('/api/process-image', upload.single('image'), async (req, res) => {
-    console.log('Received image processing request');
-    console.log('Environment:', process.env.NODE_ENV);
-    console.log('Current working directory:', process.cwd());
+    log.stage('REQUEST', 'Received new image processing request');
+    log.info(`Environment: ${process.env.NODE_ENV}`);
+    log.info(`Working Directory: ${process.cwd()}`);
     
     if (!req.file) {
-        console.log('No file uploaded');
+        log.error('VALIDATION', 'No file uploaded');
         return res.status(400).json({ error: 'No image file uploaded' });
     }
 
-    console.log('File details:', req.file);
+    log.stage('FILE_RECEIVED', `File received: ${JSON.stringify(req.file, null, 2)}`);
     const inputPath = req.file.path;
     const outputFilename = `processed_${path.basename(req.file.filename, path.extname(req.file.filename))}.png`;
     const outputPath = path.join(processedDir, outputFilename);
 
-    console.log('Input path:', inputPath);
-    console.log('Output path:', outputPath);
+    log.info(`Input path: ${inputPath}`);
+    log.info(`Output path: ${outputPath}`);
 
     try {
         // Verify input file
@@ -110,16 +126,17 @@ app.post('/api/process-image', upload.single('image'), async (req, res) => {
             throw new Error('Input file not found after upload');
         }
 
-        console.log('Input file exists:', fs.existsSync(inputPath));
-        console.log('Input file size:', fs.statSync(inputPath).size);
-        console.log('Input file permissions:', fs.statSync(inputPath).mode.toString(8));
+        log.stage('FILE_VALIDATION', `
+            File exists: ${fs.existsSync(inputPath)}
+            Size: ${fs.statSync(inputPath).size} bytes
+            Permissions: ${fs.statSync(inputPath).mode.toString(8)}
+        `);
 
-        // Verify directories are writable
+        // Verify directories
         fs.accessSync(uploadDir, fs.constants.W_OK);
         fs.accessSync(processedDir, fs.constants.W_OK);
-        console.log('Directories are writable');
+        log.stage('DIRECTORY_CHECK', 'Upload and processed directories are writable');
 
-        // Default size for resizing
         const width = 500;
         const height = 500;
 
@@ -129,69 +146,81 @@ import os
 import traceback
 from rembg import remove
 from PIL import Image
+import time
+
+def log_stage(stage, message):
+    print(f"[PYTHON] [{stage}] {message}")
 
 try:
-    print(f"Python version: {sys.version}")
-    print(f"Current working directory: {os.getcwd()}")
-    print(f"Environment variables:")
+    log_stage("INIT", f"Python version: {sys.version}")
+    log_stage("INIT", f"Working directory: {os.getcwd()}")
+    
+    # Log environment variables
+    log_stage("ENV", "Environment variables:")
     for key, value in os.environ.items():
         if 'PATH' in key or 'PYTHON' in key:
-            print(f"{key}: {value}")
+            log_stage("ENV", f"{key}: {value}")
     
     input_path = r'${inputPath}'
     output_path = r'${outputPath}'
     
-    print(f"Python script starting...")
-    print(f"Input path: {input_path}")
-    print(f"Output path: {output_path}")
+    log_stage("FILE_CHECK", f"Input path: {input_path}")
+    log_stage("FILE_CHECK", f"Output path: {output_path}")
     
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"Input file not found: {input_path}")
     
-    print(f"Input file size: {os.path.getsize(input_path)}")
-    print(f"Input file permissions: {oct(os.stat(input_path).st_mode)}")
+    log_stage("FILE_INFO", f"Input file size: {os.path.getsize(input_path)} bytes")
+    log_stage("FILE_INFO", f"Input file permissions: {oct(os.stat(input_path).st_mode)}")
     
     # Load image
-    print("Loading image...")
+    log_stage("LOAD_IMAGE", "Loading input image...")
+    start_time = time.time()
     input_img = Image.open(input_path)
-    print(f"Image loaded successfully. Size: {input_img.size}, Mode: {input_img.mode}")
+    log_stage("LOAD_IMAGE", f"Image loaded in {time.time() - start_time:.2f}s. Size: {input_img.size}, Mode: {input_img.mode}")
     
     # Convert to RGB if needed
     if input_img.mode != 'RGB':
+        log_stage("COLOR_CONVERT", f"Converting from {input_img.mode} to RGB")
+        start_time = time.time()
         input_img = input_img.convert('RGB')
-        print(f"Converted image to RGB mode")
+        log_stage("COLOR_CONVERT", f"Conversion completed in {time.time() - start_time:.2f}s")
     
     # Resize image
-    print("Resizing image...")
+    log_stage("RESIZE", f"Resizing image to {${width}}x{${height}}")
+    start_time = time.time()
     input_img = input_img.resize((${width}, ${height}), Image.Resampling.LANCZOS)
-    print(f"Image resized successfully. New size: {input_img.size}")
+    log_stage("RESIZE", f"Resize completed in {time.time() - start_time:.2f}s. New size: {input_img.size}")
     
     # Remove background
-    print("Removing background...")
+    log_stage("REMOVE_BG", "Starting background removal...")
+    start_time = time.time()
     output_img = remove(input_img)
-    print(f"Background removed successfully. Output size: {output_img.size}, Mode: {output_img.mode}")
+    log_stage("REMOVE_BG", f"Background removal completed in {time.time() - start_time:.2f}s")
+    log_stage("REMOVE_BG", f"Output image size: {output_img.size}, Mode: {output_img.mode}")
     
     # Save the processed image
-    print("Saving image...")
+    log_stage("SAVE", f"Saving processed image to {output_path}")
+    start_time = time.time()
     output_img.save(output_path, "PNG")
-    print(f"Image saved successfully to: {output_path}")
+    log_stage("SAVE", f"Save completed in {time.time() - start_time:.2f}s")
     
     if not os.path.exists(output_path):
         raise FileNotFoundError(f"Output file was not created: {output_path}")
     
-    print(f"Output file size: {os.path.getsize(output_path)}")
-    print(f"Output file permissions: {oct(os.stat(output_path).st_mode)}")
+    log_stage("COMPLETE", f"Output file size: {os.path.getsize(output_path)} bytes")
+    log_stage("COMPLETE", f"Output file permissions: {oct(os.stat(output_path).st_mode)}")
     sys.exit(0)
 except Exception as e:
-    print(f"Error: {str(e)}", file=sys.stderr)
-    print("Traceback:", file=sys.stderr)
-    print(traceback.format_exc(), file=sys.stderr)
+    log_stage("ERROR", f"Error: {str(e)}")
+    log_stage("ERROR", "Traceback:")
+    log_stage("ERROR", traceback.format_exc())
     sys.exit(1)
 `;
 
-        console.log('Spawning Python process...');
+        log.stage('PYTHON_INIT', 'Preparing to spawn Python process');
         const pythonPath = getPythonPath();
-        console.log('Using Python executable:', pythonPath);
+        log.info(`Using Python executable: ${pythonPath}`);
         
         const pythonProcess = spawn(pythonPath, ['-c', pythonScript]);
 
@@ -200,49 +229,55 @@ except Exception as e:
 
         pythonProcess.stdout.on('data', (data) => {
             stdoutData += data.toString();
-            console.log(`Python stdout: ${data.toString()}`);
+            const lines = data.toString().split('\n');
+            lines.forEach(line => {
+                if (line.trim()) console.log(`Python stdout: ${line}`);
+            });
         });
 
         pythonProcess.stderr.on('data', (data) => {
             stderrData += data.toString();
-            console.error(`Python stderr: ${data.toString()}`);
+            const lines = data.toString().split('\n');
+            lines.forEach(line => {
+                if (line.trim()) console.error(`Python stderr: ${line}`);
+            });
         });
 
         pythonProcess.on('error', (error) => {
-            console.error('Failed to start Python process:', error);
+            log.error('PYTHON_SPAWN', 'Failed to start Python process', error);
             cleanupFiles(inputPath);
             return res.status(500).json({ error: `Failed to start Python process: ${error.message}` });
         });
 
         pythonProcess.on('close', (code) => {
-            console.log('Python process closed with code:', code);
+            log.stage('PYTHON_COMPLETE', `Python process closed with code: ${code}`);
             if (code !== 0) {
-                console.error('Processing failed with error:', stderrData);
+                log.error('PYTHON_ERROR', 'Processing failed', stderrData);
                 cleanupFiles(inputPath);
                 return res.status(500).json({ error: `Processing failed: ${stderrData}` });
             }
 
-            // Verify the output file exists and has content
+            // Verify the output file
             if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size === 0) {
-                console.error('Output file not found or empty:', outputPath);
+                log.error('OUTPUT_VALIDATION', 'Output file not found or empty');
                 cleanupFiles(inputPath);
                 return res.status(500).json({ error: 'Output file not found or empty' });
             }
 
-            console.log('Sending processed file:', outputPath);
-            console.log('Output file size:', fs.statSync(outputPath).size);
+            log.stage('SEND_FILE', `Sending processed file: ${outputPath} (${fs.statSync(outputPath).size} bytes)`);
             
             // Send the processed image
             res.sendFile(path.resolve(outputPath), {}, (err) => {
                 if (err) {
-                    console.error('Error sending file:', err);
+                    log.error('SEND_FILE', 'Error sending file', err);
                     res.status(500).json({ error: 'Error sending processed image' });
                 }
+                log.stage('CLEANUP', 'Cleaning up temporary files');
                 cleanupFiles(inputPath, outputPath);
             });
         });
     } catch (error) {
-        console.error('Unexpected error:', error);
+        log.error('UNEXPECTED', 'Unexpected error occurred', error);
         cleanupFiles(inputPath);
         return res.status(500).json({ error: `Unexpected error: ${error.message}` });
     }
