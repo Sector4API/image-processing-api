@@ -12,7 +12,7 @@ const port = process.env.PORT || 5000;
 app.use(cors());
 
 // Serve static files from the React app in production
-if (process.env.NODE_ENV === 'production') {
+if (process.env.NODE_ENV === 'production' && fs.existsSync(path.join(__dirname, 'build'))) {
     app.use(express.static(path.join(__dirname, 'build')));
 }
 
@@ -136,11 +136,25 @@ except Exception as e:
 });
 
 // Serve the React app for any other routes in production
-if (process.env.NODE_ENV === 'production') {
-    app.get('*', (req, res) => {
+if (process.env.NODE_ENV === 'production' && fs.existsSync(path.join(__dirname, 'build'))) {
+    app.get('/', (req, res) => {
         res.sendFile(path.join(__dirname, 'build', 'index.html'));
     });
 }
+
+// Add a catch-all route for API 404s
+app.use('/api/*', (req, res) => {
+    res.status(404).json({ error: 'API endpoint not found' });
+});
+
+// Add a basic route for the root path when not in production
+app.get('/', (req, res) => {
+    res.send(`
+        <h1>Image Processing API</h1>
+        <p>Use POST /api/process-image to process images.</p>
+        <p>The API will automatically resize images to 500x500 and remove backgrounds.</p>
+    `);
+});
 
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
