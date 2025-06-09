@@ -11,7 +11,7 @@ const port = process.env.PORT || 5000;
 // Enable CORS
 app.use(cors());
 
-// Log all requests
+// Log all requests with timestamp
 app.use((req, res, next) => {
     console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
     next();
@@ -41,7 +41,7 @@ console.log('Processed directory:', processedDir);
     }
 });
 
-// Set up storage for uploaded files
+// Configure multer with file size limits
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         cb(null, uploadDir);
@@ -53,10 +53,28 @@ const storage = multer.diskStorage({
     }
 });
 
-const upload = multer({ storage });
+const upload = multer({
+    storage,
+    limits: {
+        fileSize: 10 * 1024 * 1024, // 10MB limit
+    }
+});
+
+// Error handling middleware for multer
+const handleMulterError = (err, req, res, next) => {
+    if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+            return res.status(400).json({ error: 'File size too large. Maximum size is 10MB.' });
+        }
+        return res.status(400).json({ error: `Upload error: ${err.message}` });
+    }
+    next(err);
+};
+
+app.use(handleMulterError);
 
 // Single endpoint for processing images
-app.post('/api/process-image', upload.single('image'), (req, res) => {
+app.post('/api/process-image', upload.single('image'), async (req, res) => {
     console.log('Received image processing request');
     console.log('Environment:', process.env.NODE_ENV);
     console.log('Python Path:', process.env.PYTHONPATH);
@@ -71,17 +89,19 @@ app.post('/api/process-image', upload.single('image'), (req, res) => {
     const inputPath = req.file.path;
     const outputFilename = `processed_${path.basename(req.file.filename, path.extname(req.file.filename))}.png`;
     const outputPath = path.join(processedDir, outputFilename);
-    
+
     console.log('Input path:', inputPath);
     console.log('Output path:', outputPath);
-    console.log('Checking file exists:', fs.existsSync(inputPath));
-    console.log('Input file size:', fs.statSync(inputPath).size);
 
-    // Default size for resizing
-    const width = 500;
-    const height = 500;
+    try {
+        console.log('Checking file exists:', fs.existsSync(inputPath));
+        console.log('Input file size:', fs.statSync(inputPath).size);
 
-    const pythonScript = `
+        // Default size for resizing
+        const width = 500;
+        const height = 500;
+
+        const pythonScript = `
 import sys
 import os
 import traceback
@@ -92,7 +112,6 @@ try:
     print(f"Python version: {sys.version}")
     print(f"Current working directory: {os.getcwd()}")
     print(f"PYTHONPATH: {os.environ.get('PYTHONPATH', 'Not set')}")
-    print(f"Files in current directory: {os.listdir('.')}")
     
     input_path = r'${inputPath}'
     output_path = r'${outputPath}'
@@ -100,14 +119,21 @@ try:
     print(f"Python script starting...")
     print(f"Input path: {input_path}")
     print(f"Output path: {output_path}")
-    print(f"Input file exists: {os.path.exists(input_path)}")
-    if os.path.exists(input_path):
-        print(f"Input file size: {os.path.getsize(input_path)}")
+    
+    if not os.path.exists(input_path):
+        raise FileNotFoundError(f"Input file not found: {input_path}")
+    
+    print(f"Input file size: {os.path.getsize(input_path)}")
     
     # Load image
     print("Loading image...")
     input_img = Image.open(input_path)
     print(f"Image loaded successfully. Size: {input_img.size}, Mode: {input_img.mode}")
+    
+    # Convert to RGB if needed
+    if input_img.mode != 'RGB':
+        input_img = input_img.convert('RGB')
+        print(f"Converted image to RGB mode")
     
     # Resize image
     print("Resizing image...")
@@ -123,10 +149,11 @@ try:
     print("Saving image...")
     output_img.save(output_path, "PNG")
     print(f"Image saved successfully to: {output_path}")
-    print(f"Output file exists: {os.path.exists(output_path)}")
-    if os.path.exists(output_path):
-        print(f"Output file size: {os.path.getsize(output_path)}")
     
+    if not os.path.exists(output_path):
+        raise FileNotFoundError(f"Output file was not created: {output_path}")
+    
+    print(f"Output file size: {os.path.getsize(output_path)}")
     sys.exit(0)
 except Exception as e:
     print(f"Error: {str(e)}", file=sys.stderr)
@@ -135,65 +162,73 @@ except Exception as e:
     sys.exit(1)
 `;
 
-    console.log('Spawning Python process...');
-    const pythonProcess = spawn('python', ['-c', pythonScript]);
+        console.log('Spawning Python process...');
+        const pythonProcess = spawn('python', ['-c', pythonScript]);
 
-    let stdoutData = '';
-    let stderrData = '';
+        let stdoutData = '';
+        let stderrData = '';
 
-    pythonProcess.stdout.on('data', (data) => {
-        stdoutData += data.toString();
-        console.log(`Python stdout: ${data.toString()}`);
-    });
+        pythonProcess.stdout.on('data', (data) => {
+            stdoutData += data.toString();
+            console.log(`Python stdout: ${data.toString()}`);
+        });
 
-    pythonProcess.stderr.on('data', (data) => {
-        stderrData += data.toString();
-        console.error(`Python stderr: ${data.toString()}`);
-    });
+        pythonProcess.stderr.on('data', (data) => {
+            stderrData += data.toString();
+            console.error(`Python stderr: ${data.toString()}`);
+        });
 
-    pythonProcess.on('error', (error) => {
-        console.error('Failed to start Python process:', error);
-        return res.status(500).json({ error: `Failed to start Python process: ${error.message}` });
-    });
+        pythonProcess.on('error', (error) => {
+            console.error('Failed to start Python process:', error);
+            cleanupFiles(inputPath);
+            return res.status(500).json({ error: `Failed to start Python process: ${error.message}` });
+        });
 
-    pythonProcess.on('close', (code) => {
-        console.log('Python process closed with code:', code);
-        if (code !== 0) {
-            console.error('Processing failed with error:', stderrData);
-            // Clean up input file
-            fs.unlink(inputPath, (err) => {
-                if (err) console.error('Error deleting input file:', err);
-            });
-            return res.status(500).json({ error: `Processing failed: ${stderrData}` });
-        }
-
-        // Verify the output file exists
-        if (!fs.existsSync(outputPath)) {
-            console.error('Output file not found:', outputPath);
-            return res.status(500).json({ error: 'Output file not found' });
-        }
-
-        console.log('Sending processed file:', outputPath);
-        console.log('Output file size:', fs.statSync(outputPath).size);
-        
-        // Send the processed image
-        res.sendFile(path.resolve(outputPath), {}, (err) => {
-            if (err) {
-                console.error('Error sending file:', err);
-                res.status(500).json({ error: 'Error sending processed image' });
+        pythonProcess.on('close', (code) => {
+            console.log('Python process closed with code:', code);
+            if (code !== 0) {
+                console.error('Processing failed with error:', stderrData);
+                cleanupFiles(inputPath);
+                return res.status(500).json({ error: `Processing failed: ${stderrData}` });
             }
 
-            // Clean up files after sending
-            console.log('Cleaning up files...');
-            fs.unlink(inputPath, (err) => {
-                if (err) console.error('Error deleting input file:', err);
-            });
-            fs.unlink(outputPath, (err) => {
-                if (err) console.error('Error deleting output file:', err);
+            // Verify the output file exists and has content
+            if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size === 0) {
+                console.error('Output file not found or empty:', outputPath);
+                cleanupFiles(inputPath);
+                return res.status(500).json({ error: 'Output file not found or empty' });
+            }
+
+            console.log('Sending processed file:', outputPath);
+            console.log('Output file size:', fs.statSync(outputPath).size);
+            
+            // Send the processed image
+            res.sendFile(path.resolve(outputPath), {}, (err) => {
+                if (err) {
+                    console.error('Error sending file:', err);
+                    res.status(500).json({ error: 'Error sending processed image' });
+                }
+                cleanupFiles(inputPath, outputPath);
             });
         });
-    });
+    } catch (error) {
+        console.error('Unexpected error:', error);
+        cleanupFiles(inputPath);
+        return res.status(500).json({ error: `Unexpected error: ${error.message}` });
+    }
 });
+
+// Helper function to clean up files
+function cleanupFiles(...files) {
+    files.forEach(file => {
+        if (file && fs.existsSync(file)) {
+            fs.unlink(file, (err) => {
+                if (err) console.error(`Error deleting file ${file}:`, err);
+                else console.log(`Successfully deleted file: ${file}`);
+            });
+        }
+    });
+}
 
 // Explicit route for test.html
 app.get('/test.html', (req, res) => {
@@ -206,19 +241,19 @@ app.get('/test.html', (req, res) => {
     }
 });
 
-// Root route
+// Redirect root to test.html
 app.get('/', (req, res) => {
     res.redirect('/test.html');
 });
 
-// Start the server
+// Start server
 app.listen(port, () => {
     console.log(`Server running on port ${port}`);
-    console.log('Current directory:', __dirname);
+    console.log('Current directory:', process.cwd());
     console.log('Available routes:');
     console.log('  - GET /test.html (Web Interface)');
     console.log('  - GET / (Redirects to /test.html)');
     console.log('  - POST /api/process-image (API Endpoint)');
-    console.log('\nTry accessing:');
+    console.log('Try accessing:');
     console.log(`  http://localhost:${port}/test.html`);
 });
